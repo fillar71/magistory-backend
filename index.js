@@ -9,23 +9,17 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors()); // Mengizinkan request dari domain lain (GitHub Pages Anda)
+app.use(cors());
 
-// Konfigurasi Multer untuk menyimpan file upload sementara
 const upload = multer({ dest: 'uploads/' });
 
-// Atur path FFmpeg dari package ffmpeg-static
 ffmpeg.setFfmpegPath(ffmpegStatic);
 
-// Pastikan direktori 'uploads' dan 'processed' ada
 const uploadsDir = path.join(__dirname, 'uploads');
 const processedDir = path.join(__dirname, 'processed');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-
-// Endpoint utama untuk memproses video
 app.post('/process-video', upload.single('video'), (req, res) => {
   if (!req.file) {
     return res.status(400).send('Tidak ada file video yang diunggah.');
@@ -47,15 +41,13 @@ app.post('/process-video', upload.single('video'), (req, res) => {
   ffmpeg(videoPath)
     .setStartTime(startTime)
     .setDuration(duration)
-    .outputOptions("-c", "copy") // Menyalin codec (sangat cepat)
+    .outputOptions("-c", "copy")
     .on('end', () => {
       console.log('Pemrosesan selesai.');
-      // Kirim file hasil untuk di-download oleh pengguna
       res.download(outputPath, outputFileName, (err) => {
         if (err) {
           console.error('Error saat mengirim file:', err);
         }
-        // Hapus file original dan hasil proses setelah dikirim
         fs.unlinkSync(videoPath);
         fs.unlinkSync(outputPath);
         console.log('File sementara telah dihapus.');
@@ -63,7 +55,7 @@ app.post('/process-video', upload.single('video'), (req, res) => {
     })
     .on('error', (err) => {
       console.error('Error FFMPEG:', err.message);
-      fs.unlinkSync(videoPath); // Hapus file original jika terjadi error
+      fs.unlinkSync(videoPath);
       res.status(500).send('Gagal memproses video: ' + err.message);
     })
     .save(outputPath);
