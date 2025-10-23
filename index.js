@@ -63,14 +63,20 @@ app.post('/process-video', upload.single('video'), (req, res) => {
     .save(outputPath);
 });
 
-// --- Endpoint Pencarian Pexels (TIDAK BERUBAH) ---
+// --- Endpoint Pencarian Pexels (MODIFIKASI) ---
 app.get('/search-pexels', async (req, res) => {
-    const { query } = req.query;
+    // Sekarang menerima query dan orientation
+    const { query, orientation } = req.query;
     if (!query) {
         return res.status(400).send('Tidak ada query pencarian.');
     }
     try {
-        const pexelsResponse = await pexelsClient.videos.search({ query: query, per_page: 10 });
+        const pexelsResponse = await pexelsClient.videos.search({ 
+            query: query, 
+            per_page: 10,
+            // Gunakan orientasi, default ke 'landscape' jika tidak ditentukan
+            orientation: (orientation === '9:16' ? 'portrait' : 'landscape') 
+        });
         res.json(pexelsResponse.videos);
     } catch (error) {
         console.error("Error di /search-pexels:", error);
@@ -80,26 +86,37 @@ app.get('/search-pexels', async (req, res) => {
 
 // --- Endpoint Idea to Video (PERUBAHAN BESAR) ---
 app.post('/idea-to-video', async (req, res) => {
-    const { idea } = req.body;
-    if (!idea) {
-        return res.status(400).send('Tidak ada ide yang diberikan.');
+    // 1. Dapatkan semua data baru dari body
+    const { idea, duration, aspectRatio, style } = req.body;
+    
+    if (!idea || !duration || !aspectRatio || !style) {
+        return res.status(400).send('Parameter tidak lengkap (membutuhkan idea, duration, aspectRatio, style).');
     }
 
     try {
-        // 1. Minta skrip DAN keyword ke Gemini dalam format JSON
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
+        // 2. Logika untuk memetakan input
+        // Map durasi ke jumlah adegan (max 8 scenes)
+        // 1-5 menit = 3 adegan, 6-10 menit = 4 adegan, dst.
+        const numScenes = Math.min(8, Math.max(3, Math.ceil(parseInt(duration) / 5)));
+        // Map aspectRatio ke Pexels orientation
+        const pexelsOrientation = (aspectRatio === '9:16') ? 'portrait' : 'landscape';
+        
+        // 3. Minta skrip DAN keyword ke Gemini
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        
+        // Prompt dinamis baru
         const prompt = `
-            Anda adalah asisten pembuat skrip video. Berdasarkan ide ini: "${idea}", 
-            buatkan skrip untuk 3 adegan pendek.
+            Anda adalah asisten pembuat skrip video. Berdasarkan ide ini: "${idea}",
+            buatkan skrip untuk video dengan gaya "${style}" dengan total durasi sekitar ${duration} menit.
+            Bagi skrip menjadi ${numScenes} adegan.
             Untuk setiap adegan, berikan:
-            1. "narration": Teks narasi singkat (1-2 kalimat).
+            1. "narration": Teks narasi singkat (1-2 kalimat) yang sesuai dengan gaya ${style}.
             2. "keyword": Satu keyword pencarian video stok dalam Bahasa Inggris yang paling relevan dengan narasi.
 
             HANYA kembalikan jawaban dalam format JSON array yang valid, seperti ini:
             [
                 {"scene": 1, "narration": "Teks narasi untuk adegan 1", "keyword": "english keyword 1"},
-                {"scene": 2, "narration": "Teks narasi untuk adegan 2", "keyword": "english keyword 2"},
-                {"scene": 3, "narration": "Teks narasi untuk adegan 3", "keyword": "english keyword 3"}
+                {"scene": 2, "narration": "Teks narasi untuk adegan 2", "keyword": "english keyword 2"}
             ]
         `;
         
@@ -107,7 +124,6 @@ app.post('/idea-to-video', async (req, res) => {
         const response = await result.response;
         let text = response.text();
         
-        // Membersihkan output Gemini (menghapus backtick markdown)
         text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
         let scenes;
@@ -118,24 +134,26 @@ app.post('/idea-to-video', async (req, res) => {
             throw new Error("Gemini tidak mengembalikan format JSON yang valid.");
         }
 
-        // 2. Untuk setiap adegan, cari 1 video di Pexels
+        // 4. Untuk setiap adegan, cari video di Pexels DENGAN ORIENTASI YANG TEPAT
         const storyboard = [];
         for (const scene of scenes) {
-            console.log(`Mencari Pexels untuk keyword: ${scene.keyword}`);
+            console.log(`Mencari Pexels (Orientasi: ${pexelsOrientation}) untuk keyword: ${scene.keyword}`);
             const pexelsResponse = await pexelsClient.videos.search({ 
                 query: scene.keyword, 
-                per_page: 1 
+                per_page: 1,
+                orientation: pexelsOrientation // Ini kuncinya!
             });
             
             const video = pexelsResponse.videos.length > 0 ? pexelsResponse.videos[0] : null;
             
             storyboard.push({
                 ...scene,
-                video: video // Tambahkan objek video Pexels ke adegan
+                videoPreview: video ? video.image : null, // URL gambar pratinjau
+                videoUrl: video ? (video.video_files.find(f => f.quality === 'hd') || video.video_files.find(f => f.quality === 'sd')).link : null // URL video
             });
         }
 
-        // 3. Kirim storyboard lengkap ke frontend
+        // 5. Kirim storyboard lengkap
         res.json(storyboard);
 
     } catch (error) {
