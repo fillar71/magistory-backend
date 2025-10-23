@@ -102,7 +102,7 @@ app.post('/idea-to-video', async (req, res) => {
         const pexelsOrientation = (aspectRatio === '9:16') ? 'portrait' : 'landscape';
         
         // 3. Minta skrip DAN keyword ke Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
         
         // Prompt dinamis baru
         const prompt = `
