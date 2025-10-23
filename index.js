@@ -12,15 +12,14 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Inisialisasi Klien API ---
-// Ambil API keys dari Environment Variables di Render/Railway
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const pexelsClient = createClient(process.env.PEXELS_API_KEY);
 
 // Middleware
 app.use(cors());
-app.use(express.json()); // Penting untuk membaca JSON body dari "Idea to Video"
+app.use(express.json());
 
-// Konfigurasi Multer (Sama seperti sebelumnya)
+// Konfigurasi Multer
 const upload = multer({ dest: 'uploads/' });
 ffmpeg.setFfmpegPath(ffmpegStatic);
 
@@ -30,26 +29,19 @@ const processedDir = path.join(__dirname, 'processed');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-
-// --- ENDPOINT 1: Manual Editing (Sama seperti sebelumnya) ---
+// --- Endpoint Manual Editing (TIDAK BERUBAH) ---
 app.post('/process-video', upload.single('video'), (req, res) => {
-  // (Kode dari /process-video Anda sebelumnya ada di sini)
-  // ... (Salin-tempel kode endpoint /process-video Anda yang lama) ...
-  // ... (Untuk kelengkapan, saya sertakan kodenya di bawah) ...
   if (!req.file) {
     return res.status(400).send('Tidak ada file video yang diunggah.');
   }
-
   const { startTime, endTime } = req.body;
   const videoPath = req.file.path;
   const outputFileName = `processed-${Date.now()}-${req.file.originalname}`;
   const outputPath = path.join(processedDir, outputFileName);
-  
   const duration = parseFloat(endTime) - parseFloat(startTime);
   if (isNaN(duration) || duration <= 0) {
       return res.status(400).send('Waktu mulai atau akhir tidak valid.');
   }
-
   console.log(`Mulai memproses: ${req.file.originalname}`);
   ffmpeg(videoPath)
     .setStartTime(startTime)
@@ -61,7 +53,6 @@ app.post('/process-video', upload.single('video'), (req, res) => {
         if (err) console.error('Error saat mengirim file:', err);
         fs.unlinkSync(videoPath);
         fs.unlinkSync(outputPath);
-        console.log('File sementara telah dihapus.');
       });
     })
     .on('error', (err) => {
@@ -72,55 +63,13 @@ app.post('/process-video', upload.single('video'), (req, res) => {
     .save(outputPath);
 });
 
-
-// --- ENDPOINT 2: Idea to Video (BARU) ---
-app.post('/idea-to-video', async (req, res) => {
-    const { idea } = req.body;
-    if (!idea) {
-        return res.status(400).send('Tidak ada ide yang diberikan.');
-    }
-
-    try {
-        // 1. Minta script/keyword ke Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const prompt = `Berikan 5 keyword pencarian video stok (dipisahkan koma) untuk ide video ini: "${idea}". Hanya berikan keyword, tanpa kalimat pembuka/penutup. Contoh: anjing berlari, taman, matahari terbenam`;
-        
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        // 2. Ambil keyword pertama dari hasil Gemini
-        const keywords = text.split(',').map(k => k.trim());
-        const firstKeyword = keywords[0];
-
-        if (!firstKeyword) {
-            throw new Error('Gemini tidak memberikan keyword yang valid.');
-        }
-
-        console.log(`Ide: "${idea}". Keyword dari Gemini: "${firstKeyword}"`);
-
-        // 3. Cari video di Pexels
-        const pexelsResponse = await pexelsClient.videos.search({ query: firstKeyword, per_page: 5 });
-        
-        // 4. Kirim hasil Pexels ke frontend
-        res.json(pexelsResponse.videos);
-
-    } catch (error) {
-        console.error("Error di /idea-to-video:", error);
-        res.status(500).send("Gagal memproses ide: " + error.message);
-    }
-});
-
-
-// --- ENDPOINT 3: Manual Pexels Search (BARU) ---
+// --- Endpoint Pencarian Pexels (TIDAK BERUBAH) ---
 app.get('/search-pexels', async (req, res) => {
     const { query } = req.query;
     if (!query) {
         return res.status(400).send('Tidak ada query pencarian.');
     }
-
     try {
-        console.log(`Mencari Pexels: "${query}"`);
         const pexelsResponse = await pexelsClient.videos.search({ query: query, per_page: 10 });
         res.json(pexelsResponse.videos);
     } catch (error) {
@@ -129,6 +78,71 @@ app.get('/search-pexels', async (req, res) => {
     }
 });
 
+// --- Endpoint Idea to Video (PERUBAHAN BESAR) ---
+app.post('/idea-to-video', async (req, res) => {
+    const { idea } = req.body;
+    if (!idea) {
+        return res.status(400).send('Tidak ada ide yang diberikan.');
+    }
+
+    try {
+        // 1. Minta skrip DAN keyword ke Gemini dalam format JSON
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
+        const prompt = `
+            Anda adalah asisten pembuat skrip video. Berdasarkan ide ini: "${idea}", 
+            buatkan skrip untuk 3 adegan pendek.
+            Untuk setiap adegan, berikan:
+            1. "narration": Teks narasi singkat (1-2 kalimat).
+            2. "keyword": Satu keyword pencarian video stok dalam Bahasa Inggris yang paling relevan dengan narasi.
+
+            HANYA kembalikan jawaban dalam format JSON array yang valid, seperti ini:
+            [
+                {"scene": 1, "narration": "Teks narasi untuk adegan 1", "keyword": "english keyword 1"},
+                {"scene": 2, "narration": "Teks narasi untuk adegan 2", "keyword": "english keyword 2"},
+                {"scene": 3, "narration": "Teks narasi untuk adegan 3", "keyword": "english keyword 3"}
+            ]
+        `;
+        
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let text = response.text();
+        
+        // Membersihkan output Gemini (menghapus backtick markdown)
+        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+
+        let scenes;
+        try {
+            scenes = JSON.parse(text);
+        } catch (e) {
+            console.error("Gagal parse JSON dari Gemini:", text);
+            throw new Error("Gemini tidak mengembalikan format JSON yang valid.");
+        }
+
+        // 2. Untuk setiap adegan, cari 1 video di Pexels
+        const storyboard = [];
+        for (const scene of scenes) {
+            console.log(`Mencari Pexels untuk keyword: ${scene.keyword}`);
+            const pexelsResponse = await pexelsClient.videos.search({ 
+                query: scene.keyword, 
+                per_page: 1 
+            });
+            
+            const video = pexelsResponse.videos.length > 0 ? pexelsResponse.videos[0] : null;
+            
+            storyboard.push({
+                ...scene,
+                video: video // Tambahkan objek video Pexels ke adegan
+            });
+        }
+
+        // 3. Kirim storyboard lengkap ke frontend
+        res.json(storyboard);
+
+    } catch (error) {
+        console.error("Error di /idea-to-video:", error);
+        res.status(500).send("Gagal memproses ide: " + error.message);
+    }
+});
 
 app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
