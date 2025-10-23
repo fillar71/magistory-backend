@@ -82,7 +82,7 @@ app.post('/idea-to-video', async (req, res) => {
 
     try {
         // 1. Minta script/keyword ke Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `Berikan 5 keyword pencarian video stok (dipisahkan koma) untuk ide video ini: "${idea}". Hanya berikan keyword, tanpa kalimat pembuka/penutup. Contoh: anjing berlari, taman, matahari terbenam`;
         
         const result = await model.generateContent(prompt);
